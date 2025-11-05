@@ -1,0 +1,13 @@
+<mat-toolbar *ngIf="!isPasswordWindow">
+  <app-backward></app-backward>
+  <app-refresh></app-refresh>
+  <app-forward></app-forward>
+  <app-address></app-address>
+  <app-debug></app-debug>
+  <app-home></app-home>
+  <span class="toolbar-spacer"></span>
+  <button mat-icon-button matTooltip="Gestionnaire de mots de passe" (click)="openPasswordManager()" aria-label="Ouvrir le gestionnaire de mots de passe">
+    <mat-icon>vpn_key</mat-icon>
+  </button>
+</mat-toolbar>
+<router-outlet></router-outlet>
