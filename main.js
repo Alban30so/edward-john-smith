@@ -1,11 +1,11 @@
-const { app, WebContentsView, BrowserWindow, ipcMain } = require('electron');
+const { app, WebContentsView, BrowserWindow, ipcMain, Menu } = require('electron'); // 'Menu' est requis
 const path = require('node:path');
 const { start } = require('node:repl');
 const fs = require('node:fs');
 
 app.whenReady().then(() => {
   const win = new BrowserWindow({
-    width: 1000,
+    width: 100,
     height: 800,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js')
@@ -18,7 +18,7 @@ app.whenReady().then(() => {
     win.loadURL('http://localhost:4200')
   }
 
-  // --- GESTIONNAIRE DE MOTS DE PASSE ---
+  //Fenêtre gestionnaire de mot de passe
   ipcMain.on('open-passwords-window', (event) => {
     const parentWindow = BrowserWindow.fromWebContents(event.sender);
     
@@ -39,10 +39,10 @@ app.whenReady().then(() => {
     } else {
       passwordWindow.loadURL('http://localhost:4200/passwords');
     }
+
+    //Lecture/Ecriture des mots de passe
     passwordWindow.webContents.on('did-finish-load', () => {
       const passwordsPath = path.join(__dirname, 'passwords.json');
-
-      //vérification de l'existence de passwords.json
       fs.access(passwordsPath, fs.constants.F_OK, (err) => {
         if (err) {
           console.log('passwords.json non trouvé, création du fichier...');
@@ -51,7 +51,6 @@ app.whenReady().then(() => {
               console.error("Erreur lors de la création de passwords.json", writeErr);
               return;
             }
-            //Envoie des données du json en tableau
             passwordWindow.webContents.send('passwords-data', []);
           });
         } else {
@@ -60,7 +59,6 @@ app.whenReady().then(() => {
               console.error("Erreur de lecture du fichier passwords.json", readErr);
               return;
             }
-            //Envoie des données du json en tableau
             passwordWindow.webContents.send('passwords-data', JSON.parse(data));
           });
         }
@@ -68,11 +66,10 @@ app.whenReady().then(() => {
     });
   });
 
-  //Sauvegarde des mots des données dans le json
+  //Sauvegarde des mots de passe.
   ipcMain.on('save-passwords', (event, passwords) => {
     const passwordsPath = path.join(__dirname, 'passwords.json');
     const data = JSON.stringify(passwords, null, 2); 
-
     fs.writeFile(passwordsPath, data, 'utf8', (err) => {
       if (err) {
         console.error("Erreur lors de la sauvegarde du fichier passwords.json", err);
@@ -81,20 +78,36 @@ app.whenReady().then(() => {
       }
     });
   });
-  //Fermeture de la fenêtre du gestionnaire
+
+  //fermeture fenêtre mdp
   ipcMain.on('close-password-window', (event) => {
     const windowToClose = BrowserWindow.fromWebContents(event.sender);
     if (windowToClose) {
       windowToClose.close();
     }
   });
-  const view = new WebContentsView();
+
+
+  // view preload pour lecture page web par electron
+  const view = new WebContentsView({
+    webPreferences: {
+      preload: path.join(__dirname, 'view-preload.js') 
+    }
+  });
   win.contentView.addChildView(view);
+
+  //match electron/webview
   function fitViewToWin() {
     const winSize = win.webContents.getOwnerBrowserWindow().getBounds();
     view.setBounds({ x: 0, y: 55, width: winSize.width, height: winSize.height });
   }
-    win.webContents.openDevTools({ mode: 'detach' });
+
+    //Dev Tools
+    //view.webContents.openDevTools({ mode: 'detach' });
+    //win.webContents.openDevTools({ mode: 'detach' });
+
+
+  //ToolBar
   ipcMain.on('toogle-dev-tool', () => {
     if (winContent.isDevToolsOpened()) {
       win.webContents.closeDevTools();
@@ -137,6 +150,86 @@ app.whenReady().then(() => {
     win.webContents.send('url-changed', view.webContents.getURL());
   });
 
+  
+  //Ecoute view-preload.js
+  ipcMain.on('show-password-menu', () => {
+    console.log("[LOG] 'show-password-menu' reçu ! Vérification des correspondances...");
+
+    const url = view.webContents.getURL();
+    let domain;
+    try {
+      domain = new URL(url).hostname; 
+    } catch (e) {
+      console.warn("URL non valide pour le menu contextuel:", url);
+      return;
+    }
+
+    const passwordsPath = path.join(__dirname, 'passwords.json');
+    fs.readFile(passwordsPath, 'utf-8', (readErr, data) => {
+      if (readErr) { 
+        console.log('[MDP] Fichier passwords.json non trouvé ou illisible.');
+        return; 
+      } 
+
+      const passwords = JSON.parse(data);
+      const matches = passwords.filter(entry => domain.includes(entry.website));
+
+      if (matches.length === 0) {
+        console.log(`[MDP] Aucune correspondance trouvée pour le domaine: ${domain}`);
+        return;
+      }
+
+      console.log(`[MDP] Trouvé ${matches.length} correspondance(s) ! Construction du menu...`);
+
+      // Construction et affichage du menu
+      const menuTemplate = matches.map(match => ({
+        label: `Remplir avec : ${match.username}`,
+        click: () => {
+          const injectionScript = `
+            const username = ${JSON.stringify(match.username)};
+            const password = ${JSON.stringify(match.password)};
+            
+            // Cible le champ sur lequel on a cliqué (qui est le champ actif)
+            const passField = document.activeElement; 
+            
+            // Cherche le champ email/identifiant
+            let userField = null;
+            if (passField && passField.form) {
+                // Stratégie 1: chercher un champ 'email'
+                userField = passField.form.querySelector('input[type="email"]');
+                // Stratégie 2: chercher un champ contenant 'user' ou 'login'
+                if (!userField) {
+                    userField = passField.form.querySelector('input[type="text"][name*="user"], input[type="text"][id*="user"], input[type="text"][name*="login"], input[type="text"][id*="login"]');
+                }
+                // Stratégie 3: prendre le premier champ texte/email avant le champ mot de passe
+                if (!userField) {
+                   const inputs = Array.from(passField.form.querySelectorAll('input[type="text"], input[type="email"]'));
+                   if (inputs.length > 0) userField = inputs[0];
+                }
+            }
+
+            // Remplir les champs
+            if (passField) {
+              passField.value = password;
+              passField.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+            if (userField) {
+              userField.value = username;
+              userField.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+          `;
+          view.webContents.executeJavaScript(injectionScript);
+        }
+      }));
+
+      //Menu clic droit
+      menuTemplate.unshift({ label: 'Gestionnaire de mots de passe', enabled: false });
+      const menu = Menu.buildFromTemplate(menuTemplate);
+      menu.popup(view.webContents.getOwnerBrowserWindow());
+    });
+  });
+
+
   ipcMain.handle('current-url', () => {
     return view.webContents.getURL();
   });
@@ -153,64 +246,4 @@ app.whenReady().then(() => {
   win.on('resized', () => {
     fitViewToWin();
   });
-
-  // AUTOREMPLISSAGE DES MOTS DE PASSE ---
-  view.webContents.on('did-finish-load', () => {
-    const url = view.webContents.getURL();
-    let domain;
-    try {
-      domain = new URL(url).hostname;
-    } catch (e) {
-      console.warn("Impossible d'analyser l'URL pour l'autofill:", url);
-      return;
-    }
-
-    // Lire le fichier de mots de passe
-    const passwordsPath = path.join(__dirname, 'passwords.json');
-    fs.readFile(passwordsPath, 'utf-8', (readErr, data) => {
-      if (readErr) {
-        return;//Pas de fichier passwords.json
-      }
-
-      const passwords = JSON.parse(data);
-      // On cherche un site enregistré avec son domaine.
-      const match = passwords.find(entry => domain.includes(entry.website));
-
-      if (match) {
-        console.log(`Identifiants trouvés pour ${match.website}, injection...`);
-        const injectionScript = `
-          const username = ${JSON.stringify(match.username)};
-          const password = ${JSON.stringify(match.password)};
-          
-          // Cherche le champ mot de passe (très fiable)
-          const passField = document.querySelector('input[type="password"]');
-          
-          // Cherche le champ email/identifiant (plusieurs stratégies)
-          let userField = document.querySelector('input[type="email"]');
-          if (!userField) {
-            userField = document.querySelector('input[type="text"][name*="user"], input[type="text"][id*="user"], input[type="text"][name*="login"], input[type="text"][id*="login"]');
-          }
-          // Autre stratégie : le premier champ texte/email avant le mot de passe
-          if (!userField && passField && passField.form) {
-             const inputs = Array.from(passField.form.querySelectorAll('input[type="text"], input[type="email"]'));
-             if (inputs.length > 0) userField = inputs[0];
-          }
-
-          // Remplir les champs s'ils sont trouvés
-          if (passField) {
-            passField.value = password;
-            passField.dispatchEvent(new Event('input', { bubbles: true }));
-          }
-          if (userField) {
-            userField.value = username;
-            userField.dispatchEvent(new Event('input', { bubbles: true }));
-          }
-        `;
-        view.webContents.executeJavaScript(injectionScript)
-          .then(() => console.log("Script d'autofill exécuté."))
-          .catch(err => console.error("Échec du script d'autofill:", err));
-      }
-    });
-  });
-  
 })
