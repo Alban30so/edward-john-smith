@@ -5,7 +5,7 @@ const fs = require('node:fs');
 
 app.whenReady().then(() => {
   const win = new BrowserWindow({
-    width: 100,
+    width: 1000,
     height: 800,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js')
